@@ -50,6 +50,13 @@ python scripts/jj_report.py --metrics results/metrics/metrics_long.csv --out res
 python scripts/jj_validation.py --metrics results/metrics/metrics_long.csv --out results/validation_plots
 ```
 
+6) Phase 3 figures and significance
+
+```bash
+python scripts/jj_figures.py --metrics results/metrics/metrics_long.csv --out results/figures
+python scripts/jj_significance.py --metrics results/metrics/metrics_long.csv --out results/reports
+```
+
 ## Dataset capabilities: voltage-only vs IV vs CPR
 
 - Voltage-only: computes V-based knee, hysteresis, and nonreciprocity proxies.

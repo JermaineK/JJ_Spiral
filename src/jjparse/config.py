@@ -80,6 +80,15 @@ DEFAULT_CONFIG = {
         "csv": None,
         "regex": None,
     },
+    "null_models": {
+        "direction_n": 30,
+        "phase_n": 5,
+        "phase_max_segments": 600,
+        "parity_boot": 200,
+        "seed": 123,
+        "phase_all_segments": False,
+        "phase_full_pass": False,
+    },
 }
 
 
