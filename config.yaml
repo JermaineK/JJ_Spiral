@@ -1,0 +1,67 @@
+units:
+  current:
+    ma: 1.0e-3
+    ua: 1.0e-6
+    na: 1.0e-9
+    pa: 1.0e-12
+  voltage:
+    mv: 1.0e-3
+    uv: 1.0e-6
+    nv: 1.0e-9
+  field:
+    mt: 1.0e-3
+    ut: 1.0e-6
+    nt: 1.0e-9
+    gauss: 1.0e-4
+  temperature:
+    mk: 1.0e-3
+  freq:
+    khz: 1.0e3
+    mhz: 1.0e6
+    ghz: 1.0e9
+phase:
+  assume_degrees_if_abs_gt: 6.5
+parity:
+  grid_n: 200
+  eps: 1.0e-12
+knee:
+  min_points: 6
+  min_segment: 3
+  use_ruptures: true
+  ruptures_model: rbf
+  ruptures_penalty: 5.0
+  bootstrap_iters: 100
+  conf_slope_factor: 3.0
+  conf_edge_frac: 0.05
+  rank_cap_percentile: 99.0
+qc:
+  hist_bins: 50
+  max_points: 5000
+fit:
+  phi0_bounds: [-3.14159265, 3.14159265]
+smoothing:
+  method: savgol
+  window: 11
+  polyorder: 3
+metrics:
+  dv_dx_spike_thresh: null
+  dv_dx_spike_multiplier: 5.0
+  eps: 1.0e-12
+entropy:
+  order: 3
+  delay: 1
+  max_points: 2000
+incoherence:
+  min_points: 16
+  rolling_window: 11
+  normalize:
+    method: percentile
+    p_low: 1.0
+    p_high: 99.0
+resample:
+  grid_n: 200
+segments:
+  min_points: 5
+pairing:
+  csv: null
+  regex: null

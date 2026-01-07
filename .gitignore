@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+Data_for_analysis/
+data/raw/
+results/parsed/
+results/qc_plots/
+results/reports/run_*.log
