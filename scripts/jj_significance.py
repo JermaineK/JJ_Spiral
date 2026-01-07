@@ -69,15 +69,18 @@ def _phase_scramble(values: np.ndarray, rng: np.random.Generator) -> np.ndarray:
 def _load_segments(
     metrics_df: pd.DataFrame,
     segments_dir: Path,
+    config: dict,
     only_bidirectional: bool = False,
 ) -> list[dict]:
     cache: dict[str, pd.DataFrame] = {}
     segments: list[dict] = []
+    edge_frac = float(config.get("knee", {}).get("conf_edge_frac", 0.05))
     for _, row in metrics_df.iterrows():
         if only_bidirectional and not bool(row.get("is_bidirectional", False)):
             continue
         file_id = str(row.get("file_id"))
         segment_id = int(row.get("segment_id", 0))
+        x_name = row.get("x_name") or row.get("axis_primary")
         if file_id not in cache:
             seg_path = segments_dir / f"{file_id}.parquet"
             if not seg_path.exists():
@@ -85,6 +88,8 @@ def _load_segments(
             cache[file_id] = pd.read_parquet(seg_path)
         seg_df = cache[file_id]
         seg = seg_df[seg_df["segment_id"] == segment_id]
+        if x_name and "x_name" in seg.columns:
+            seg = seg[seg["x_name"] == x_name]
         if seg.empty:
             continue
         x = pd.to_numeric(seg["x"], errors="coerce").to_numpy()
@@ -94,14 +99,34 @@ def _load_segments(
         v = v[mask]
         if x.size < 5:
             continue
+        x_min = float(np.nanmin(x))
+        x_max = float(np.nanmax(x))
+        span = x_max - x_min
+        knee_value = row.get("knee_x_value")
+        if knee_value is None or not np.isfinite(knee_value):
+            raw_knee = row.get("knee_x")
+            if raw_knee is not None and np.isfinite(raw_knee):
+                knee_value = float(raw_knee)
+        knee_norm = row.get("knee_x_norm")
+        if knee_norm is None or not np.isfinite(knee_norm):
+            if knee_value is not None and np.isfinite(knee_value) and span > 0:
+                knee_norm = float((knee_value - x_min) / span)
+        knee_valid = bool(
+            knee_norm is not None and np.isfinite(knee_norm) and 0.0 <= knee_norm <= 1.0 and span > 0
+        )
+        knee_edge_flag = bool(knee_valid and (knee_norm <= edge_frac or knee_norm >= 1.0 - edge_frac))
         segments.append(
             {
                 "file_id": file_id,
                 "segment_id": segment_id,
+                "x_name": x_name,
                 "x": x,
                 "v": v,
                 "H_incoh": row.get("H_incoh"),
-                "knee_x": row.get("knee_x"),
+                "knee_x": knee_value,
+                "knee_x_norm": knee_norm,
+                "knee_valid": knee_valid,
+                "knee_edge_flag": knee_edge_flag,
                 "is_bidirectional": bool(row.get("is_bidirectional", False)),
             }
         )
@@ -151,6 +176,8 @@ def _direction_randomization_null(
 
             knee_x = seg.get("knee_x")
             if knee_x is None or not np.isfinite(knee_x):
+                continue
+            if not seg.get("knee_valid", False):
                 continue
             if "eta_V_signed" not in eta or parity_bit is None:
                 continue
@@ -211,6 +238,14 @@ def _phase_scramble_null(
             _ = compute_knee_score(x, v_scrambled, config)
             knee = detect_knee(x, v_scrambled, min_segment=min_segment)
             knee_x = knee.get("knee_x") if knee else None
+            knee_valid = False
+            if knee_x is not None and np.isfinite(knee_x):
+                x_min = float(np.nanmin(x))
+                x_max = float(np.nanmax(x))
+                span = x_max - x_min
+                if span > 0:
+                    knee_norm = (float(knee_x) - x_min) / span
+                    knee_valid = 0.0 <= knee_norm <= 1.0
 
             incoh = compute_incoherence(x, v_scrambled, config)
             h_raw = incoh.get("H_incoh_raw") if incoh else None
@@ -232,7 +267,7 @@ def _phase_scramble_null(
                 else:
                     counts0[idx] += 1
 
-            if knee_x is None or not np.isfinite(knee_x) or "eta_V_signed" not in eta or parity_bit is None:
+            if knee_x is None or not np.isfinite(knee_x) or not knee_valid or "eta_V_signed" not in eta or parity_bit is None:
                 continue
             knee_thresh = abs(float(knee_x))
             x_abs = np.abs(x)
@@ -272,6 +307,62 @@ def _z_score(obs: float, mean: float | None, std: float | None) -> float | None:
     if mean is None or std is None or std == 0.0 or not np.isfinite(std):
         return None
     return float((obs - mean) / std)
+
+
+def _z_range(values: np.ndarray, obs: float, n_boot: int, rng: np.random.Generator) -> tuple[float | None, float | None]:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 2 or n_boot <= 0:
+        return None, None
+    z_vals = []
+    for _ in range(n_boot):
+        sample = rng.choice(values, size=values.size, replace=True)
+        mean = float(sample.mean())
+        std = float(sample.std(ddof=1))
+        if std == 0.0 or not np.isfinite(std):
+            continue
+        z_vals.append((obs - mean) / std)
+    if not z_vals:
+        return None, None
+    return float(np.percentile(z_vals, 5)), float(np.percentile(z_vals, 95))
+
+
+def _stratified_sample(segments: list[dict], max_segments: int, rng: np.random.Generator) -> list[dict]:
+    if max_segments <= 0 or len(segments) <= max_segments:
+        return segments
+    groups: dict[str, list[dict]] = {}
+    for seg in segments:
+        key = str(seg.get("x_name") or "unknown")
+        groups.setdefault(key, []).append(seg)
+    if len(groups) > max_segments:
+        keys = list(groups.keys())
+        picked = rng.choice(keys, size=max_segments, replace=False)
+        sampled = []
+        for key in picked:
+            sample = rng.choice(groups[key], size=1, replace=False)[0]
+            sampled.append(sample)
+        return sampled
+    total = sum(len(group) for group in groups.values())
+    counts = {key: max(1, int(round(len(group) / total * max_segments))) for key, group in groups.items()}
+
+    current = sum(counts.values())
+    while current > max_segments:
+        for key in sorted(groups, key=lambda k: counts[k], reverse=True):
+            if counts[key] > 1 and current > max_segments:
+                counts[key] -= 1
+                current -= 1
+    while current < max_segments:
+        for key in sorted(groups, key=lambda k: len(groups[k]) - counts[k], reverse=True):
+            if counts[key] < len(groups[key]) and current < max_segments:
+                counts[key] += 1
+                current += 1
+
+    sampled = []
+    for key, group in groups.items():
+        k = min(counts[key], len(group))
+        idx = rng.choice(len(group), size=k, replace=False)
+        sampled.extend([group[i] for i in idx])
+    return sampled
 
 
 def _bootstrap_parity_stability(
@@ -329,13 +420,6 @@ def main() -> None:
     obs_parity = pd.to_numeric(file_summary.get("parity_stability", pd.Series(dtype=float)), errors="coerce").dropna()
     obs_b = float(np.median(obs_parity)) if not obs_parity.empty else np.nan
 
-    knee_parity_path = out_dir / "knee_parity_summary.csv"
-    obs_lock = np.nan
-    if knee_parity_path.exists():
-        kp = pd.read_csv(knee_parity_path)
-        if not kp.empty and "fraction_lock_after" in kp.columns:
-            obs_lock = float(kp["fraction_lock_after"].iloc[0])
-
     bounds = _normalize_bounds(df.get("H_incoh_raw", pd.Series(dtype=float)), config)
     if bounds is None:
         LOGGER.warning("Unable to compute H_incoh normalization bounds; null eta_norm may be skipped.")
@@ -344,6 +428,7 @@ def main() -> None:
     phase_n = int(config.get("null_models", {}).get("phase_n", 50))
     phase_max_segments = int(config.get("null_models", {}).get("phase_max_segments", 0))
     parity_boot = int(config.get("null_models", {}).get("parity_boot", 200))
+    z_boot = int(config.get("null_models", {}).get("z_boot", 200))
     phase_all = bool(config.get("null_models", {}).get("phase_all_segments", True))
     phase_full_pass = bool(config.get("null_models", {}).get("phase_full_pass", False))
 
@@ -353,16 +438,40 @@ def main() -> None:
     rng_full = np.random.default_rng(base_seed + 1)
     rng_boot = np.random.default_rng(base_seed + 2)
     rng_sample = np.random.default_rng(base_seed + 3)
+    rng_z = np.random.default_rng(base_seed + 4)
 
-    segments_bidir = _load_segments(bidir_df, segments_dir, only_bidirectional=True)
-    if not segments_bidir:
+    segments_bidir_all = _load_segments(bidir_df, segments_dir, config, only_bidirectional=True)
+    if not segments_bidir_all:
         LOGGER.warning("No bidirectional segments available for null models.")
         return
-    before = len(segments_bidir)
-    segments_bidir = [seg for seg in segments_bidir if np.isfinite(seg.get("H_incoh", np.nan))]
+    before = len(segments_bidir_all)
+    segments_bidir = [seg for seg in segments_bidir_all if np.isfinite(seg.get("H_incoh", np.nan))]
     dropped = before - len(segments_bidir)
     if dropped:
         LOGGER.info("Dropped %d bidirectional segments without H_incoh for direction null.", dropped)
+
+    seg_info = pd.DataFrame(
+        [
+            {
+                "file_id": seg["file_id"],
+                "segment_id": seg["segment_id"],
+                "knee_valid": seg.get("knee_valid", False),
+            }
+            for seg in segments_bidir_all
+        ]
+    )
+    obs_lock = np.nan
+    if not seg_info.empty:
+        merged = df.merge(seg_info, on=["file_id", "segment_id"], how="left")
+        subset = merged[
+            merged.get("is_bidirectional", False)
+            & merged.get("knee_valid", False)
+            & merged.get("parity_pre", pd.Series(dtype=float)).notna()
+            & merged.get("parity_post", pd.Series(dtype=float)).notna()
+            & merged.get("parity_bit", pd.Series(dtype=float)).notna()
+        ]
+        if not subset.empty:
+            obs_lock = float((subset["parity_post"] == subset["parity_bit"]).mean())
 
     LOGGER.info("Running direction-randomized null with N=%d", direction_n)
     eta_null_a, counts0_a, counts1_a, lock_null_a = _direction_randomization_null(
@@ -375,17 +484,16 @@ def main() -> None:
     tb_null_a = _bootstrap_parity_stability(counts0_a, counts1_a, parity_boot, rng_boot)
 
     if phase_all:
-        segments_all = _load_segments(df, segments_dir, only_bidirectional=False)
+        segments_all = _load_segments(df, segments_dir, config, only_bidirectional=False)
     else:
-        segments_all = segments_bidir
+        segments_all = segments_bidir_all
 
     if phase_max_segments > 0 and len(segments_all) > phase_max_segments:
-        idx = rng_sample.choice(len(segments_all), size=phase_max_segments, replace=False)
-        segments_all = [segments_all[i] for i in idx]
-        LOGGER.info("Phase-scramble using %d sampled segments.", len(segments_all))
+        segments_all = _stratified_sample(segments_all, phase_max_segments, rng_sample)
+        LOGGER.info("Phase-scramble using %d sampled segments (stratified).", len(segments_all))
 
     if phase_full_pass and not phase_all:
-        all_segments = _load_segments(df, segments_dir, only_bidirectional=False)
+        all_segments = _load_segments(df, segments_dir, config, only_bidirectional=False)
         total = 0
         min_segment = int(config.get("knee", {}).get("min_segment", 3))
         for seg in all_segments:
@@ -416,6 +524,10 @@ def main() -> None:
         tb_mean, tb_std = _summary_stats(tb_null)
         lock_mean, lock_std = _summary_stats(lock_null)
 
+        eta_z_low, eta_z_high = _z_range(eta_null, obs_eta, z_boot, rng_z)
+        tb_z_low, tb_z_high = _z_range(tb_null, obs_b, z_boot, rng_z)
+        lock_z_low, lock_z_high = _z_range(lock_null, obs_lock, z_boot, rng_z)
+
         rows.append(
             {
                 "statistic": "T_eta",
@@ -424,6 +536,8 @@ def main() -> None:
                 "null_mean": eta_mean,
                 "null_std": eta_std,
                 "z_score": _z_score(obs_eta, eta_mean, eta_std),
+                "z_5th": eta_z_low,
+                "z_95th": eta_z_high,
                 "n": int(len(eta_null)),
             }
         )
@@ -435,6 +549,8 @@ def main() -> None:
                 "null_mean": tb_mean,
                 "null_std": tb_std,
                 "z_score": _z_score(obs_b, tb_mean, tb_std),
+                "z_5th": tb_z_low,
+                "z_95th": tb_z_high,
                 "n": int(len(tb_null)),
             }
         )
@@ -446,6 +562,8 @@ def main() -> None:
                 "null_mean": lock_mean,
                 "null_std": lock_std,
                 "z_score": _z_score(obs_lock, lock_mean, lock_std),
+                "z_5th": lock_z_low,
+                "z_95th": lock_z_high,
                 "n": int(len(lock_null)),
             }
         )
@@ -453,11 +571,11 @@ def main() -> None:
     summary_df = pd.DataFrame(rows)
     summary_df.to_csv(out_dir / "significance_summary.csv", index=False)
 
-    def _find_z(stat: str, model: str) -> float | None:
+    def _find_z(stat: str, model: str, column: str = "z_score") -> float | None:
         match = summary_df[(summary_df["statistic"] == stat) & (summary_df["null_model"] == model)]
         if match.empty:
             return None
-        return match["z_score"].iloc[0]
+        return match[column].iloc[0]
 
     lines = []
     lines.append("# Significance summary")
@@ -468,7 +586,7 @@ def main() -> None:
         f"- Direction randomization: per-point sign flips (50/50) on bidirectional traces; N={direction_n}."
     )
     lines.append(
-        f"- Phase scramble: randomize FFT phases per segment (amplitude preserved); N={phase_n}, phase_all_segments={phase_all}, phase_full_pass={phase_full_pass}, phase_max_segments={phase_max_segments}."
+        f"- Phase scramble: randomize FFT phases per segment (amplitude preserved); N={phase_n}, phase_all_segments={phase_all}, phase_full_pass={phase_full_pass}, phase_max_segments={phase_max_segments} (stratified by x_name)."
     )
     lines.append(
         "- Parity-bit null handling: eta_V_signed is randomly sign-flipped (50/50) per evaluation to emulate direction-label ambiguity."
@@ -476,20 +594,37 @@ def main() -> None:
     lines.append(
         f"- Parity stability null uses a binomial bootstrap over per-file parity counts; bootstrap_n={parity_boot}."
     )
+    lines.append(f"- Z-score ranges use bootstrap over null replicates; z_boot={z_boot}.")
     lines.append("")
     lines.append("## Observed statistics")
     lines.append("")
     lines.append(f"- T_eta (median eta_norm): {obs_eta:.6g}")
     lines.append(f"- T_b (median parity_stability): {obs_b:.6g}")
     lines.append(f"- T_lock (fraction parity locks after knee): {obs_lock:.6g}")
+    lines.append("- T_lock computed on bidirectional segments with knee_valid=True.")
     lines.append("")
+    def _fmt(val: float | None) -> str:
+        if val is None or not np.isfinite(val):
+            return "NA"
+        return f"{val:.4g}"
+
     lines.append("## Z-scores")
     lines.append("")
     for model in ["direction_randomization", "phase_scramble"]:
         z_eta = _find_z("T_eta", model)
         z_b = _find_z("T_b", model)
         z_lock = _find_z("T_lock", model)
-        lines.append(f"- {model}: z_eta={z_eta:.4g}, z_b={z_b:.4g}, z_lock={z_lock:.4g}")
+        z_eta_low = _find_z("T_eta", model, "z_5th")
+        z_eta_high = _find_z("T_eta", model, "z_95th")
+        z_b_low = _find_z("T_b", model, "z_5th")
+        z_b_high = _find_z("T_b", model, "z_95th")
+        z_lock_low = _find_z("T_lock", model, "z_5th")
+        z_lock_high = _find_z("T_lock", model, "z_95th")
+        lines.append(
+            f"- {model}: z_eta={_fmt(z_eta)} (p5={_fmt(z_eta_low)}, p95={_fmt(z_eta_high)}), "
+            f"z_b={_fmt(z_b)} (p5={_fmt(z_b_low)}, p95={_fmt(z_b_high)}), "
+            f"z_lock={_fmt(z_lock)} (p5={_fmt(z_lock_low)}, p95={_fmt(z_lock_high)})"
+        )
         if all(val is not None for val in [z_eta, z_b, z_lock]):
             z_combined = float(np.sqrt(z_eta**2 + z_b**2 + z_lock**2))
             lines.append(f"- {model}: z_combined={z_combined:.4g} (assumes approximate independence)")
@@ -501,11 +636,11 @@ def main() -> None:
         "phase_scramble": "phase-scrambled",
     }
     for model in ["direction_randomization", "phase_scramble"]:
-        z_eta = _find_z("T_eta", model)
-        z_lock = _find_z("T_lock", model)
-        if z_eta is None or z_lock is None:
+        z_eta_low = _find_z("T_eta", model, "z_5th")
+        z_lock_low = _find_z("T_lock", model, "z_5th")
+        if z_eta_low is None or z_lock_low is None:
             continue
-        z_level = min(abs(z_eta), abs(z_lock))
+        z_level = min(abs(z_eta_low), abs(z_lock_low))
         label = name_map.get(model, model)
         lines.append(
             f"- Under {label} null models, observed odd-channel strength and post-knee parity locking deviate from null expectations at the z~{z_level:.3g} level."

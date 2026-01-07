@@ -81,10 +81,11 @@ DEFAULT_CONFIG = {
         "regex": None,
     },
     "null_models": {
-        "direction_n": 30,
-        "phase_n": 5,
+        "direction_n": 300,
+        "phase_n": 100,
         "phase_max_segments": 600,
         "parity_boot": 200,
+        "z_boot": 500,
         "seed": 123,
         "phase_all_segments": False,
         "phase_full_pass": False,
