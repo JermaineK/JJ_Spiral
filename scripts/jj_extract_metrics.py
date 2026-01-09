@@ -19,6 +19,7 @@ from jjparse.io import make_file_id, read_dat
 from jjparse.metrics import METRICS, axis_properties, compute_voltage_nonreciprocity, run_metric, split_segments
 from jjparse.preprocess import apply_unit_conversions, infer_phase_radians
 from jjparse.schema import build_signal_pack, coerce_types, detect_capabilities, infer_primary_axis, standardize_columns
+from jjparse.version import PIPELINE_VERSION
 
 LOGGER = logging.getLogger("jjparse")
 
@@ -211,6 +212,7 @@ def _write_knee_parity_summary(metrics_long: pd.DataFrame, out_dir: Path) -> Non
                     "fraction_flip": np.nan,
                     "n_lock_after": 0,
                     "fraction_lock_after": np.nan,
+                    "pipeline_version": PIPELINE_VERSION,
                 }
             ]
         )
@@ -225,6 +227,7 @@ def _write_knee_parity_summary(metrics_long: pd.DataFrame, out_dir: Path) -> Non
                     "fraction_flip": float(flips / total),
                     "n_lock_after": locks,
                     "fraction_lock_after": float(locks / total),
+                    "pipeline_version": PIPELINE_VERSION,
                 }
             ]
         )
@@ -425,10 +428,33 @@ def main() -> None:
                 "is_time_series": bool(is_time_series),
                 "has_direction_meta": bool(has_direction_meta),
                 "source_file": meta.get("source_file"),
+                "pipeline_version": PIPELINE_VERSION,
             }
             row.update(capabilities)
             row.update(file_metrics)
             row.update(seg_metrics)
+
+            x_min = float(np.nanmin(seg_x)) if np.isfinite(seg_x).any() else np.nan
+            x_max = float(np.nanmax(seg_x)) if np.isfinite(seg_x).any() else np.nan
+            span = x_max - x_min if np.isfinite(x_max) and np.isfinite(x_min) else np.nan
+            row["x_min"] = x_min
+            row["x_max"] = x_max
+            knee_val = row.get("knee_x")
+            if knee_val is not None and np.isfinite(knee_val) and np.isfinite(span) and span > 0:
+                row["knee_x_value"] = float(knee_val)
+                row["knee_x_norm"] = float((knee_val - x_min) / span)
+            else:
+                row["knee_x_value"] = np.nan
+                row["knee_x_norm"] = np.nan
+
+            knee_norm = row.get("knee_x_norm")
+            if knee_norm is not None and np.isfinite(knee_norm) and 0.0 <= knee_norm <= 1.0:
+                row["knee_valid"] = True
+                edge_frac = float(config.get("knee", {}).get("conf_edge_frac", 0.05))
+                row["knee_edge_flag"] = bool(knee_norm <= edge_frac or knee_norm >= 1.0 - edge_frac)
+            else:
+                row["knee_valid"] = False
+                row["knee_edge_flag"] = False
 
             row["knee_confident"] = _knee_confident(
                 row.get("knee_x"),
@@ -438,27 +464,47 @@ def main() -> None:
                 config,
             )
 
-            if "eta_V_signed" in row:
+            eta_valid = bool(row.get("eta_valid")) if row.get("eta_valid") is not None else False
+            row["eta_valid"] = eta_valid if row.get("is_bidirectional") else False
+
+            if "eta_V_signed" in row and row.get("eta_valid"):
                 parity_bit = _parity_bit(row.get("eta_V_signed"))
                 if parity_bit is not None:
                     row["parity_bit"] = parity_bit
 
-            if row.get("is_bidirectional") and np.isfinite(row.get("knee_x", np.nan)):
-                knee_x = float(row["knee_x"])
-                x_abs = np.abs(seg_x)
-                knee_thresh = abs(knee_x)
-                pre_mask = x_abs < knee_thresh
-                post_mask = x_abs > knee_thresh
-                pre = compute_voltage_nonreciprocity(seg_x[pre_mask], seg_v[pre_mask], grid_n=grid_n, eps=eps)
-                post = compute_voltage_nonreciprocity(seg_x[post_mask], seg_v[post_mask], grid_n=grid_n, eps=eps)
-                parity_pre = _parity_bit(pre.get("eta_V_signed") if pre else None)
-                parity_post = _parity_bit(post.get("eta_V_signed") if post else None)
-                if parity_pre is not None:
-                    row["parity_pre"] = parity_pre
-                if parity_post is not None:
-                    row["parity_post"] = parity_post
-                if parity_pre is not None and parity_post is not None:
-                    row["parity_flip_at_knee"] = bool(parity_pre != parity_post)
+            if row.get("is_bidirectional") and row.get("eta_valid") and row.get("knee_valid"):
+                knee_x = float(row["knee_x_value"]) if np.isfinite(row.get("knee_x_value", np.nan)) else np.nan
+                if np.isfinite(knee_x):
+                    x_abs = np.abs(seg_x)
+                    knee_thresh = abs(knee_x)
+                    pre_mask = x_abs < knee_thresh
+                    post_mask = x_abs > knee_thresh
+                    pre = compute_voltage_nonreciprocity(
+                        seg_x[pre_mask],
+                        seg_v[pre_mask],
+                        grid_n=grid_n,
+                        eps=eps,
+                        min_overlap=float(config.get("parity", {}).get("min_overlap", 0.8)),
+                        den_min=float(config.get("parity", {}).get("den_min", 0.0)),
+                    )
+                    post = compute_voltage_nonreciprocity(
+                        seg_x[post_mask],
+                        seg_v[post_mask],
+                        grid_n=grid_n,
+                        eps=eps,
+                        min_overlap=float(config.get("parity", {}).get("min_overlap", 0.8)),
+                        den_min=float(config.get("parity", {}).get("den_min", 0.0)),
+                    )
+                    if pre.get("eta_valid"):
+                        parity_pre = _parity_bit(pre.get("eta_V_signed"))
+                        if parity_pre is not None:
+                            row["parity_pre"] = parity_pre
+                    if post.get("eta_valid"):
+                        parity_post = _parity_bit(post.get("eta_V_signed"))
+                        if parity_post is not None:
+                            row["parity_post"] = parity_post
+                    if row.get("parity_pre") is not None and row.get("parity_post") is not None:
+                        row["parity_flip_at_knee"] = bool(row.get("parity_pre") != row.get("parity_post"))
 
             if file_to_pair:
                 row["pair_id"] = file_to_pair.get(file_id)
@@ -473,8 +519,16 @@ def main() -> None:
             metrics_long["H_incoh"] = _normalize_incoherence(metrics_long["H_incoh_raw"], config)
 
         eps = float(config.get("metrics", {}).get("eps", 1e-12))
+        if "eta_valid" in metrics_long.columns:
+            metrics_long["eta_valid"] = metrics_long["eta_valid"].fillna(False)
+        else:
+            metrics_long["eta_valid"] = False
+
         if "eta_V_L1" in metrics_long.columns and "H_incoh" in metrics_long.columns:
-            metrics_long["eta_norm"] = metrics_long["eta_V_L1"] / (eps + metrics_long["H_incoh"])
+            eta_mask = metrics_long["eta_valid"] & metrics_long["H_incoh"].notna()
+            metrics_long.loc[eta_mask, "eta_norm"] = metrics_long.loc[eta_mask, "eta_V_L1"] / (
+                eps + metrics_long.loc[eta_mask, "H_incoh"]
+            )
         if "K_max" in metrics_long.columns and "H_incoh" in metrics_long.columns:
             metrics_long["knee_score_norm"] = metrics_long["K_max"] / (eps + metrics_long["H_incoh"])
 
@@ -483,12 +537,16 @@ def main() -> None:
             ks = pd.to_numeric(metrics_long["knee_score_norm"], errors="coerce").dropna()
             if not ks.empty:
                 kcap = float(np.nanpercentile(ks, rank_pct))
+                metrics_long["knee_score_cap"] = kcap
+                metrics_long["knee_score_capped"] = (
+                    pd.to_numeric(metrics_long["knee_score_norm"], errors="coerce") >= kcap
+                )
                 metrics_long["knee_score_rank"] = np.log1p(
                     np.minimum(pd.to_numeric(metrics_long["knee_score_norm"], errors="coerce"), kcap)
                 )
 
         if "parity_bit" in metrics_long.columns:
-            stability = metrics_long.groupby("file_id")["parity_bit"].apply(_parity_stability)
+            stability = metrics_long[metrics_long["eta_valid"]].groupby("file_id")["parity_bit"].apply(_parity_stability)
             metrics_long["parity_stability"] = metrics_long["file_id"].map(stability)
 
         _write_knee_parity_summary(metrics_long, Path("results/reports"))

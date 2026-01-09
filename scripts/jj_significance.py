@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from jjparse.config import load_config, seed_everything, setup_logging
 from jjparse.metrics import compute_incoherence, compute_knee_score, compute_voltage_nonreciprocity, detect_knee
+from jjparse.version import PIPELINE_VERSION
 
 LOGGER = logging.getLogger("jjparse")
 
@@ -71,12 +72,15 @@ def _load_segments(
     segments_dir: Path,
     config: dict,
     only_bidirectional: bool = False,
+    require_eta_valid: bool = False,
 ) -> list[dict]:
     cache: dict[str, pd.DataFrame] = {}
     segments: list[dict] = []
     edge_frac = float(config.get("knee", {}).get("conf_edge_frac", 0.05))
     for _, row in metrics_df.iterrows():
         if only_bidirectional and not bool(row.get("is_bidirectional", False)):
+            continue
+        if require_eta_valid and not bool(row.get("eta_valid", False)):
             continue
         file_id = str(row.get("file_id"))
         segment_id = int(row.get("segment_id", 0))
@@ -123,6 +127,7 @@ def _load_segments(
                 "x": x,
                 "v": v,
                 "H_incoh": row.get("H_incoh"),
+                "eta_valid": bool(row.get("eta_valid", False)),
                 "knee_x": knee_value,
                 "knee_x_norm": knee_norm,
                 "knee_valid": knee_valid,
@@ -138,6 +143,8 @@ def _direction_randomization_null(
     n_iter: int,
     grid_n: int,
     eps: float,
+    min_overlap: float,
+    den_min: float,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     file_ids = sorted({seg["file_id"] for seg in segments})
@@ -160,11 +167,18 @@ def _direction_randomization_null(
                 continue
             signs = rng.choice([-1.0, 1.0], size=x.size)
             x_rand = x * signs
-            eta = compute_voltage_nonreciprocity(x_rand, v, grid_n=grid_n, eps=eps)
-            if "eta_V_L1" in eta:
+            eta = compute_voltage_nonreciprocity(
+                x_rand,
+                v,
+                grid_n=grid_n,
+                eps=eps,
+                min_overlap=min_overlap,
+                den_min=den_min,
+            )
+            if eta.get("eta_valid") and "eta_V_L1" in eta:
                 eta_vals.append(float(eta["eta_V_L1"] / (eps + h_incoh)))
             parity_bit = None
-            if "eta_V_signed" in eta:
+            if eta.get("eta_valid") and "eta_V_signed" in eta:
                 parity_sign = 1.0 if eta["eta_V_signed"] > 0 else -1.0
                 parity_sign *= rng.choice([-1.0, 1.0])
                 parity_bit = 1 if parity_sign > 0 else 0
@@ -187,8 +201,15 @@ def _direction_randomization_null(
             post_mask = x_abs > knee_thresh
             if not pre_mask.any() or not post_mask.any():
                 continue
-            post = compute_voltage_nonreciprocity(x_rand[post_mask], v[post_mask], grid_n=grid_n, eps=eps)
-            if "eta_V_signed" not in post:
+            post = compute_voltage_nonreciprocity(
+                x_rand[post_mask],
+                v[post_mask],
+                grid_n=grid_n,
+                eps=eps,
+                min_overlap=min_overlap,
+                den_min=den_min,
+            )
+            if not post.get("eta_valid") or "eta_V_signed" not in post:
                 continue
             parity_post_sign = 1.0 if post["eta_V_signed"] > 0 else -1.0
             parity_post_sign *= rng.choice([-1.0, 1.0])
@@ -212,6 +233,8 @@ def _phase_scramble_null(
     n_iter: int,
     grid_n: int,
     eps: float,
+    min_overlap: float,
+    den_min: float,
     rng: np.random.Generator,
     config: dict,
     bounds: tuple[float, float] | None,
@@ -253,11 +276,18 @@ def _phase_scramble_null(
 
             if not seg.get("is_bidirectional"):
                 continue
-            eta = compute_voltage_nonreciprocity(x, v_scrambled, grid_n=grid_n, eps=eps)
-            if h_incoh is not None and "eta_V_L1" in eta:
+            eta = compute_voltage_nonreciprocity(
+                x,
+                v_scrambled,
+                grid_n=grid_n,
+                eps=eps,
+                min_overlap=min_overlap,
+                den_min=den_min,
+            )
+            if h_incoh is not None and eta.get("eta_valid") and "eta_V_L1" in eta:
                 eta_vals.append(float(eta["eta_V_L1"] / (eps + h_incoh)))
             parity_bit = None
-            if "eta_V_signed" in eta:
+            if eta.get("eta_valid") and "eta_V_signed" in eta:
                 parity_sign = 1.0 if eta["eta_V_signed"] > 0 else -1.0
                 parity_sign *= rng.choice([-1.0, 1.0])
                 parity_bit = 1 if parity_sign > 0 else 0
@@ -275,8 +305,15 @@ def _phase_scramble_null(
             post_mask = x_abs > knee_thresh
             if not pre_mask.any() or not post_mask.any():
                 continue
-            post = compute_voltage_nonreciprocity(x[post_mask], v_scrambled[post_mask], grid_n=grid_n, eps=eps)
-            if "eta_V_signed" not in post:
+            post = compute_voltage_nonreciprocity(
+                x[post_mask],
+                v_scrambled[post_mask],
+                grid_n=grid_n,
+                eps=eps,
+                min_overlap=min_overlap,
+                den_min=den_min,
+            )
+            if not post.get("eta_valid") or "eta_V_signed" not in post:
                 continue
             parity_post_sign = 1.0 if post["eta_V_signed"] > 0 else -1.0
             parity_post_sign *= rng.choice([-1.0, 1.0])
@@ -393,6 +430,7 @@ def main() -> None:
     parser.add_argument("--segments-dir", default="results/parsed/segments", help="Segment parquet folder")
     parser.add_argument("--out", default="results/reports", help="Output folder")
     parser.add_argument("--config", default=None, help="Path to config.yaml")
+    parser.add_argument("--suffix", default="", help="Suffix for output filenames (e.g., _phase45)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed override")
     args = parser.parse_args()
 
@@ -412,7 +450,8 @@ def main() -> None:
         return
 
     bidir_mask = df.get("is_bidirectional", pd.Series(False, index=df.index)).fillna(False)
-    bidir_df = df[bidir_mask & df["eta_norm"].notna()]
+    eta_valid_mask = df.get("eta_valid", pd.Series(False, index=df.index)).fillna(False)
+    bidir_df = df[bidir_mask & eta_valid_mask & df["eta_norm"].notna()]
 
     obs_eta = float(np.median(pd.to_numeric(bidir_df["eta_norm"], errors="coerce").dropna()))
 
@@ -434,13 +473,15 @@ def main() -> None:
 
     grid_n = int(config.get("parity", {}).get("grid_n", 200))
     eps = float(config.get("metrics", {}).get("eps", 1e-12))
+    min_overlap = float(config.get("parity", {}).get("min_overlap", 0.8))
+    den_min = float(config.get("parity", {}).get("den_min", 0.0))
     rng = np.random.default_rng(base_seed)
     rng_full = np.random.default_rng(base_seed + 1)
     rng_boot = np.random.default_rng(base_seed + 2)
     rng_sample = np.random.default_rng(base_seed + 3)
     rng_z = np.random.default_rng(base_seed + 4)
 
-    segments_bidir_all = _load_segments(bidir_df, segments_dir, config, only_bidirectional=True)
+    segments_bidir_all = _load_segments(bidir_df, segments_dir, config, only_bidirectional=True, require_eta_valid=True)
     if not segments_bidir_all:
         LOGGER.warning("No bidirectional segments available for null models.")
         return
@@ -450,28 +491,17 @@ def main() -> None:
     if dropped:
         LOGGER.info("Dropped %d bidirectional segments without H_incoh for direction null.", dropped)
 
-    seg_info = pd.DataFrame(
-        [
-            {
-                "file_id": seg["file_id"],
-                "segment_id": seg["segment_id"],
-                "knee_valid": seg.get("knee_valid", False),
-            }
-            for seg in segments_bidir_all
-        ]
-    )
     obs_lock = np.nan
-    if not seg_info.empty:
-        merged = df.merge(seg_info, on=["file_id", "segment_id"], how="left")
-        subset = merged[
-            merged.get("is_bidirectional", False)
-            & merged.get("knee_valid", False)
-            & merged.get("parity_pre", pd.Series(dtype=float)).notna()
-            & merged.get("parity_post", pd.Series(dtype=float)).notna()
-            & merged.get("parity_bit", pd.Series(dtype=float)).notna()
-        ]
-        if not subset.empty:
-            obs_lock = float((subset["parity_post"] == subset["parity_bit"]).mean())
+    subset = df[
+        df.get("is_bidirectional", False)
+        & df.get("eta_valid", False)
+        & df.get("knee_valid", False)
+        & df.get("parity_pre", pd.Series(dtype=float)).notna()
+        & df.get("parity_post", pd.Series(dtype=float)).notna()
+        & df.get("parity_bit", pd.Series(dtype=float)).notna()
+    ]
+    if not subset.empty:
+        obs_lock = float((subset["parity_post"] == subset["parity_bit"]).mean())
 
     LOGGER.info("Running direction-randomized null with N=%d", direction_n)
     eta_null_a, counts0_a, counts1_a, lock_null_a = _direction_randomization_null(
@@ -479,6 +509,8 @@ def main() -> None:
         n_iter=direction_n,
         grid_n=grid_n,
         eps=eps,
+        min_overlap=min_overlap,
+        den_min=den_min,
         rng=rng,
     )
     tb_null_a = _bootstrap_parity_stability(counts0_a, counts1_a, parity_boot, rng_boot)
@@ -509,6 +541,8 @@ def main() -> None:
         n_iter=phase_n,
         grid_n=grid_n,
         eps=eps,
+        min_overlap=min_overlap,
+        den_min=den_min,
         rng=rng,
         config=config,
         bounds=bounds,
@@ -569,7 +603,9 @@ def main() -> None:
         )
 
     summary_df = pd.DataFrame(rows)
-    summary_df.to_csv(out_dir / "significance_summary.csv", index=False)
+    summary_df["pipeline_version"] = PIPELINE_VERSION
+    summary_name = f"significance_summary{args.suffix}.csv"
+    summary_df.to_csv(out_dir / summary_name, index=False)
 
     def _find_z(stat: str, model: str, column: str = "z_score") -> float | None:
         match = summary_df[(summary_df["statistic"] == stat) & (summary_df["null_model"] == model)]
@@ -579,6 +615,8 @@ def main() -> None:
 
     lines = []
     lines.append("# Significance summary")
+    lines.append("")
+    lines.append(f"- Pipeline version: {PIPELINE_VERSION}")
     lines.append("")
     lines.append("## Null models")
     lines.append("")
@@ -649,7 +687,8 @@ def main() -> None:
         "- Sigma here is algorithmic significance, not a particle-physics discovery claim; null definitions, N, and dependence notes are reported above."
     )
 
-    (out_dir / "significance.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    md_name = f"significance{args.suffix}.md"
+    (out_dir / md_name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

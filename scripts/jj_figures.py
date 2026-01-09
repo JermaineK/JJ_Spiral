@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from jjparse.config import load_config, seed_everything, setup_logging
+from jjparse.version import PIPELINE_VERSION
 
 LOGGER = logging.getLogger("jjparse")
 QC_LOGGER = logging.getLogger("jjparse.plot_qc")
@@ -205,10 +206,17 @@ def _build_exemplar_index(
     bidir_df = metrics_df[bidir_mask]
     unidir_df = metrics_df[~bidir_mask]
 
-    for row in _select_top_unique(bidir_df.dropna(subset=["eta_norm"]), "eta_norm", top_n):
+    eta_candidates = bidir_df.copy()
+    if "eta_valid" in eta_candidates.columns:
+        eta_candidates = eta_candidates[eta_candidates["eta_valid"].fillna(False)]
+    eta_candidates = eta_candidates[eta_candidates["H_incoh"].notna()]
+    for row in _select_top_unique(eta_candidates.dropna(subset=["eta_norm"]), "eta_norm", top_n):
         _add_selection(selection, row, "top_eta_norm")
 
-    for row in _select_top_unique(metrics_df.dropna(subset=["knee_score_rank"]), "knee_score_rank", top_n):
+    knee_candidates = metrics_df.copy()
+    if "knee_valid" in knee_candidates.columns:
+        knee_candidates = knee_candidates[knee_candidates["knee_valid"].fillna(False)]
+    for row in _select_top_unique(knee_candidates.dropna(subset=["knee_score_rank"]), "knee_score_rank", top_n):
         _add_selection(selection, row, "top_knee_score")
 
     used_files = {key[0] for key in selection}
@@ -230,9 +238,16 @@ def _build_exemplar_index(
                 "x_name": row.get("x_name"),
                 "bidirectional": bool(row.get("is_bidirectional")),
                 "reasons": ";".join(reasons),
+                "pipeline_version": PIPELINE_VERSION,
                 "eta_V_L1": row.get("eta_V_L1"),
                 "eta_norm": row.get("eta_norm"),
                 "eta_V_signed": row.get("eta_V_signed"),
+                "eta_V_L2": row.get("eta_V_L2"),
+                "corr_pm": row.get("corr_pm"),
+                "eta_valid": row.get("eta_valid"),
+                "eta_reason": row.get("eta_reason"),
+                "f_overlap": row.get("f_overlap"),
+                "eta_denom": row.get("eta_denom"),
                 "parity_bit": row.get("parity_bit"),
                 "H_incoh": row.get("H_incoh"),
                 "H_incoh_raw": row.get("H_incoh_raw"),
@@ -240,6 +255,7 @@ def _build_exemplar_index(
                 "knee_x_norm": row.get("knee_x_norm"),
                 "knee_valid": row.get("knee_valid"),
                 "knee_edge_flag": row.get("knee_edge_flag"),
+                "knee_score_capped": row.get("knee_score_capped"),
                 "knee_score_rank": row.get("knee_score_rank"),
             }
         )
@@ -364,6 +380,9 @@ def _plot_trace_on_ax(
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.4)
 
     if bidirectional:
+        eta_valid = row.get("eta_valid")
+        eta_valid_str = "NA" if eta_valid is None or not np.isfinite(eta_valid) else str(bool(eta_valid))
+        annotations.append(f"eta_valid={eta_valid_str}")
         for label, key in [
             ("eta_V_L1", "eta_V_L1"),
             ("eta_norm", "eta_norm"),
@@ -379,6 +398,11 @@ def _plot_trace_on_ax(
                     annotations.append(f"{label}={int(value)}")
                 else:
                     annotations.append(f"{label}={value:.4g}")
+        f_overlap = row.get("f_overlap")
+        if f_overlap is not None and np.isfinite(f_overlap):
+            annotations.append(f"f_overlap={float(f_overlap):.3f}")
+        else:
+            annotations.append("f_overlap=NA")
 
     h_incoh = row.get("H_incoh")
     h_raw = row.get("H_incoh_raw")
@@ -408,6 +432,12 @@ def _plot_trace_on_ax(
             annotations.append(f"knee_x={knee_value:.4g} (norm={knee_norm:.3f})")
         else:
             annotations.append(f"knee_x={knee_value:.4g}")
+    if row.get("knee_valid") is not None:
+        annotations.append(f"knee_valid={bool(row.get('knee_valid'))}")
+    if row.get("knee_edge_flag") is not None:
+        annotations.append(f"knee_edge={bool(row.get('knee_edge_flag'))}")
+    if row.get("knee_score_capped") is not None:
+        annotations.append(f"knee_capped={bool(row.get('knee_score_capped'))}")
 
     if annotations:
         ax.text(
@@ -572,9 +602,9 @@ def _plot_overview_2x2(
 
 
 def _check_qc(metrics_df: pd.DataFrame, exemplar_df: pd.DataFrame) -> None:
-    knee_available = pd.to_numeric(metrics_df["knee_x_value"], errors="coerce").notna()
+    knee_valid = metrics_df.get("knee_valid", pd.Series(False, index=metrics_df.index)).fillna(False)
     knee_norm = pd.to_numeric(metrics_df["knee_x_norm"], errors="coerce")
-    valid_mask = knee_available & knee_norm.notna()
+    valid_mask = knee_valid & knee_norm.notna()
     if valid_mask.any():
         in_range = ((knee_norm[valid_mask] >= 0.0) & (knee_norm[valid_mask] <= 1.0)).mean()
         if in_range < 0.99:
@@ -610,6 +640,7 @@ def main() -> None:
 
     _set_style()
     _setup_qc_logger(Path("results/reports/plot_qc_warnings.log"))
+    QC_LOGGER.info("Pipeline version: %s", PIPELINE_VERSION)
 
     metrics_path = Path(args.metrics)
     segments_dir = Path(args.segments_dir)

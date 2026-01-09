@@ -1,6 +1,7 @@
-2026-01-07 21:20:49,882 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_3_184_1 seg 0
-2026-01-07 21:20:50,208 WARNING H_incoh clipped to zero with nonzero raw for 220726030808_134_3 seg 0
-2026-01-07 21:20:50,521 WARNING H_incoh clipped to zero with nonzero raw for 220726030808_135_3 seg 0
-2026-01-07 21:20:50,822 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_2_059_3 seg 0
-2026-01-07 21:20:51,140 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_2_059_4 seg 0
-2026-01-07 21:20:51,444 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_2_059_6 seg 0
+2026-01-09 18:37:37,204 INFO Pipeline version: 0.4.5
+2026-01-09 18:38:57,257 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_3_184_1 seg 0
+2026-01-09 18:38:57,522 WARNING H_incoh clipped to zero with nonzero raw for 220726030808_134_3 seg 0
+2026-01-09 18:38:57,782 WARNING H_incoh clipped to zero with nonzero raw for 220726030808_135_3 seg 0
+2026-01-09 18:38:58,039 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_2_059_3 seg 0
+2026-01-09 18:38:58,304 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_2_059_4 seg 0
+2026-01-09 18:38:58,571 WARNING H_incoh clipped to zero with nonzero raw for 220804133537_3_2_059_6 seg 0

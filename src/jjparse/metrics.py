@@ -97,42 +97,119 @@ def compute_voltage_nonreciprocity(
     v: np.ndarray,
     grid_n: int = 200,
     eps: float = 1e-12,
+    min_overlap: float = 0.8,
+    den_min: float | None = None,
 ) -> dict:
     mask = np.isfinite(x) & np.isfinite(v)
     x = x[mask]
     v = v[mask]
     if x.size < 5:
-        return {}
+        return {"eta_valid": False, "eta_reason": "insufficient_points"}
 
     pos_mask = x > 0
     neg_mask = x < 0
     if not pos_mask.any() or not neg_mask.any():
-        return {}
+        return {"eta_valid": False, "eta_reason": "missing_pair"}
 
     x_pos = np.abs(x[pos_mask])
     x_neg = np.abs(x[neg_mask])
     v_pos = v[pos_mask]
     v_neg = v[neg_mask]
 
-    max_common = min(x_pos.max(), x_neg.max())
-    if not np.isfinite(max_common) or max_common <= 0:
-        return {}
+    x_min_plus = float(np.nanmin(x_pos))
+    x_max_plus = float(np.nanmax(x_pos))
+    x_min_minus = float(np.nanmin(x_neg))
+    x_max_minus = float(np.nanmax(x_neg))
+    union_min = min(x_min_plus, x_min_minus)
+    union_max = max(x_max_plus, x_max_minus)
+    overlap_min = max(x_min_plus, x_min_minus)
+    overlap_max = min(x_max_plus, x_max_minus)
+    union_range = union_max - union_min
+    overlap_range = overlap_max - overlap_min
+    if not np.isfinite(union_range) or union_range <= 0 or not np.isfinite(overlap_range) or overlap_range <= 0:
+        return {
+            "eta_valid": False,
+            "eta_reason": "low_overlap",
+            "x_min_plus": x_min_plus,
+            "x_max_plus": x_max_plus,
+            "x_min_minus": x_min_minus,
+            "x_max_minus": x_max_minus,
+        }
 
-    grid = np.linspace(0, max_common, grid_n)
+    f_overlap = overlap_range / union_range
+    if f_overlap < min_overlap:
+        return {
+            "eta_valid": False,
+            "eta_reason": "low_overlap",
+            "x_min_plus": x_min_plus,
+            "x_max_plus": x_max_plus,
+            "x_min_minus": x_min_minus,
+            "x_max_minus": x_max_minus,
+            "f_overlap": float(f_overlap),
+        }
+
+    grid = np.linspace(overlap_min, overlap_max, grid_n)
     v_plus = _interp_on_abs_grid(x_pos, v_pos, grid)
     v_minus = _interp_on_abs_grid(x_neg, v_neg, grid)
 
     valid = np.isfinite(v_plus) & np.isfinite(v_minus)
     if not valid.any():
-        return {}
+        return {
+            "eta_valid": False,
+            "eta_reason": "no_overlap",
+            "x_min_plus": x_min_plus,
+            "x_max_plus": x_max_plus,
+            "x_min_minus": x_min_minus,
+            "x_max_minus": x_max_minus,
+            "f_overlap": float(f_overlap),
+        }
 
     denom = np.mean(np.abs(v_plus[valid]) + np.abs(v_minus[valid])) + eps
+    if den_min is None:
+        den_min = 0.0
+    if denom < den_min:
+        return {
+            "eta_valid": False,
+            "eta_reason": "tiny_denominator",
+            "x_min_plus": x_min_plus,
+            "x_max_plus": x_max_plus,
+            "x_min_minus": x_min_minus,
+            "x_max_minus": x_max_minus,
+            "x_grid_min": float(overlap_min),
+            "x_grid_max": float(overlap_max),
+            "n_grid": int(grid_n),
+            "eta_denom": float(denom),
+            "f_overlap": float(f_overlap),
+        }
     eta_l1 = float(np.mean(np.abs(v_plus[valid] - v_minus[valid])) / denom)
     eta_signed = float(np.mean(v_plus[valid] + v_minus[valid]) / denom)
+    diff = v_plus[valid] - v_minus[valid]
+    l2_num = float(np.sqrt(np.mean(diff**2)))
+    l2_denom = float(np.sqrt(np.mean(v_plus[valid] ** 2)) + np.sqrt(np.mean(v_minus[valid] ** 2)) + eps)
+    eta_l2 = float(l2_num / l2_denom) if l2_denom > 0 else np.nan
+    corr_pm = np.nan
+    if valid.sum() >= 2:
+        v_plus_valid = v_plus[valid]
+        v_minus_valid = v_minus[valid]
+        if np.std(v_plus_valid) > 0 and np.std(v_minus_valid) > 0:
+            corr_pm = float(np.corrcoef(v_plus_valid, v_minus_valid)[0, 1])
 
     return {
+        "eta_valid": True,
+        "eta_reason": "ok",
         "eta_V_L1": eta_l1,
+        "eta_V_L2": eta_l2,
         "eta_V_signed": eta_signed,
+        "corr_pm": corr_pm,
+        "x_min_plus": x_min_plus,
+        "x_max_plus": x_max_plus,
+        "x_min_minus": x_min_minus,
+        "x_max_minus": x_max_minus,
+        "x_grid_min": float(overlap_min),
+        "x_grid_max": float(overlap_max),
+        "n_grid": int(grid_n),
+        "eta_denom": float(denom),
+        "f_overlap": float(f_overlap),
     }
 
 
@@ -693,7 +770,9 @@ def metric_eta_voltage(context: dict) -> dict:
     v = context["signals"]["V"]
     grid_n = int(context.get("config", {}).get("parity", {}).get("grid_n", 200))
     eps = float(context.get("config", {}).get("parity", {}).get("eps", 1e-12))
-    return compute_voltage_nonreciprocity(x, v, grid_n=grid_n, eps=eps)
+    min_overlap = float(context.get("config", {}).get("parity", {}).get("min_overlap", 0.8))
+    den_min = context.get("config", {}).get("parity", {}).get("den_min", 0.0)
+    return compute_voltage_nonreciprocity(x, v, grid_n=grid_n, eps=eps, min_overlap=min_overlap, den_min=den_min)
 
 
 def metric_hysteresis(context: dict) -> dict:

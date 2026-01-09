@@ -1,5 +1,7 @@
 # Significance summary
 
+- Pipeline version: 0.4.5
+
 ## Null models
 
 - Direction randomization: per-point sign flips (50/50) on bidirectional traces; N=300.
@@ -10,20 +12,20 @@
 
 ## Observed statistics
 
-- T_eta (median eta_norm): 1.15867
+- T_eta (median eta_norm): 1.15852
 - T_b (median parity_stability): 1
 - T_lock (fraction parity locks after knee): 0.996713
 - T_lock computed on bidirectional segments with knee_valid=True.
 
 ## Z-scores
 
-- direction_randomization: z_eta=59.42 (p5=55.85, p95=64.39), z_b=364.3 (p5=338.5, p95=407.8), z_lock=64.34 (p5=61.09, p95=68.5)
-- direction_randomization: z_combined=374.7 (assumes approximate independence)
-- phase_scramble: z_eta=72.94 (p5=66.47, p95=82.39), z_b=137.7 (p5=124.2, p95=159.7), z_lock=22.54 (p5=20.06, p95=26.24)
-- phase_scramble: z_combined=157.4 (assumes approximate independence)
+- direction_randomization: z_eta=56.67 (p5=52.98, p95=60.85), z_b=440.3 (p5=390.1, p95=518.4), z_lock=56.21 (p5=52.4, p95=60.12)
+- direction_randomization: z_combined=447.5 (assumes approximate independence)
+- phase_scramble: z_eta=77.88 (p5=70.68, p95=88.77), z_b=159.6 (p5=138.9, p95=197.1), z_lock=27.08 (p5=24.39, p95=30.37)
+- phase_scramble: z_combined=179.7 (assumes approximate independence)
 
 ## Interpretation
 
-- Under direction-randomized null models, observed odd-channel strength and post-knee parity locking deviate from null expectations at the z~55.8 level.
-- Under phase-scrambled null models, observed odd-channel strength and post-knee parity locking deviate from null expectations at the z~20.1 level.
+- Under direction-randomized null models, observed odd-channel strength and post-knee parity locking deviate from null expectations at the z~52.4 level.
+- Under phase-scrambled null models, observed odd-channel strength and post-knee parity locking deviate from null expectations at the z~24.4 level.
 - Sigma here is algorithmic significance, not a particle-physics discovery claim; null definitions, N, and dependence notes are reported above.

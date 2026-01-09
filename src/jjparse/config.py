@@ -27,6 +27,8 @@ DEFAULT_CONFIG = {
     "parity": {
         "grid_n": 200,
         "eps": 1e-12,
+        "min_overlap": 0.8,
+        "den_min": 1e-12,
     },
     "knee": {
         "min_points": 6,

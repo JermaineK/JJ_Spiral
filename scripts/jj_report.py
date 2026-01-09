@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from jjparse.version import PIPELINE_VERSION
 
 
 def _first_non_null(series: pd.Series):
@@ -23,6 +30,18 @@ def _distribution(series: pd.Series) -> dict:
         "count": int(series.count()),
         "median": float(series.median()),
         "p95": float(series.quantile(0.95)),
+    }
+
+
+def _distribution_extended(series: pd.Series) -> dict:
+    series = pd.to_numeric(series, errors="coerce").dropna()
+    if series.empty:
+        return {}
+    return {
+        "count": int(series.count()),
+        "median": float(series.median()),
+        "p95": float(series.quantile(0.95)),
+        "p05": float(series.quantile(0.05)),
     }
 
 
@@ -57,23 +76,36 @@ def main() -> None:
 
     metrics_dist = {
         "knee_x": _distribution(df.get("knee_x", pd.Series(dtype=float))),
+        "knee_x_norm": _distribution(df.get("knee_x_norm", pd.Series(dtype=float))),
         "H_incoh_raw": _distribution(df.get("H_incoh_raw", pd.Series(dtype=float))),
         "H_incoh": _distribution(df.get("H_incoh", pd.Series(dtype=float))),
         "eta_V_L1": _distribution(df.get("eta_V_L1", pd.Series(dtype=float))),
+        "eta_V_L2": _distribution(df.get("eta_V_L2", pd.Series(dtype=float))),
+        "corr_pm": _distribution(df.get("corr_pm", pd.Series(dtype=float))),
         "eta_norm": _distribution(df.get("eta_norm", pd.Series(dtype=float))),
         "K_max": _distribution(df.get("K_max", pd.Series(dtype=float))),
         "knee_score_norm": _distribution(df.get("knee_score_norm", pd.Series(dtype=float))),
         "knee_score_rank": _distribution(df.get("knee_score_rank", pd.Series(dtype=float))),
     }
 
-    top_eta = df.dropna(subset=["eta_norm"]).sort_values("eta_norm", ascending=False).head(args.top_n)
-    top_knee = df.dropna(subset=["knee_score_rank"]).sort_values("knee_score_rank", ascending=False).head(args.top_n)
+    top_eta = (
+        df[df.get("eta_valid", False)]
+        .dropna(subset=["eta_norm"])
+        .sort_values("eta_norm", ascending=False)
+        .head(args.top_n)
+    )
+    top_knee = (
+        df[df.get("knee_valid", False)]
+        .dropna(subset=["knee_score_rank"])
+        .sort_values("knee_score_rank", ascending=False)
+        .head(args.top_n)
+    )
 
     h_method_counts = df.get("H_method", pd.Series(dtype=str)).value_counts(dropna=True)
     parity_stability = file_summary.get("parity_stability", pd.Series(dtype=float))
     parity_stats = _distribution(parity_stability)
 
-    eta_compare = df.dropna(subset=["eta_V_L1", "eta_norm", "H_incoh"])
+    eta_compare = df[df.get("eta_valid", False)].dropna(subset=["eta_V_L1", "eta_norm", "H_incoh"])
     suppressed = pd.DataFrame()
     promoted = pd.DataFrame()
     if not eta_compare.empty:
@@ -93,6 +125,8 @@ def main() -> None:
 
     lines = []
     lines.append("# Summary")
+    lines.append("")
+    lines.append(f"- Pipeline version: {PIPELINE_VERSION}")
     lines.append("")
     lines.append("## Dataset capabilities")
     lines.append("")
@@ -127,6 +161,60 @@ def main() -> None:
             lines.append(f"- {key}: n=0")
         else:
             lines.append(f"- {key}: n={stats['count']}, median={stats['median']:.6g}, p95={stats['p95']:.6g}")
+    lines.append("")
+
+    lines.append("## QC checks")
+    lines.append("")
+    eta_valid = df.get("eta_valid", pd.Series(False, index=df.index)).fillna(False)
+    knee_valid = df.get("knee_valid", pd.Series(False, index=df.index)).fillna(False)
+    knee_edge = df.get("knee_edge_flag", pd.Series(False, index=df.index)).fillna(False)
+    knee_capped = df.get("knee_score_capped", pd.Series(False, index=df.index)).fillna(False)
+    h_incoh = pd.to_numeric(df.get("H_incoh", pd.Series(dtype=float)), errors="coerce")
+    h_raw = pd.to_numeric(df.get("H_incoh_raw", pd.Series(dtype=float)), errors="coerce")
+    h_missing = h_incoh.isna().mean() if len(h_incoh) else np.nan
+    h_zero_true = ((h_incoh == 0.0) & (h_raw == 0.0)).mean() if len(h_incoh) else np.nan
+
+    lines.append(f"- eta_valid: {eta_valid.mean() * 100:.2f}% of segments")
+    lines.append(f"- knee_edge_flag: {knee_edge[knee_valid].mean() * 100:.2f}% of valid knees")
+    cap_val = pd.to_numeric(df.get("knee_score_cap", pd.Series(dtype=float)), errors="coerce").dropna()
+    cap_unique = cap_val.iloc[0] if not cap_val.empty else np.nan
+    lines.append(f"- knee_score_capped: {knee_capped.mean() * 100:.2f}% of segments")
+    if np.isfinite(cap_unique):
+        lines.append(f"- knee_score_cap (p99): {cap_unique:.6g}")
+    if np.isfinite(h_missing):
+        lines.append(f"- H_incoh missing: {h_missing * 100:.2f}% of segments")
+    if np.isfinite(h_zero_true):
+        lines.append(f"- H_incoh == 0 (raw==0): {h_zero_true * 100:.2f}% of segments")
+    lines.append("")
+
+    lines.append("## Knee position distributions (knee_x_norm)")
+    lines.append("")
+    knee_all = _distribution_extended(df.loc[knee_valid, "knee_x_norm"] if "knee_x_norm" in df.columns else pd.Series(dtype=float))
+    if knee_all:
+        lines.append(
+            f"- all valid: n={knee_all['count']}, p05={knee_all['p05']:.3g}, median={knee_all['median']:.3g}, p95={knee_all['p95']:.3g}"
+        )
+    else:
+        lines.append("- all valid: n=0")
+
+    knee_top = _distribution_extended(top_knee.get("knee_x_norm", pd.Series(dtype=float)))
+    if knee_top:
+        lines.append(
+            f"- top knee_score_rank: n={knee_top['count']}, p05={knee_top['p05']:.3g}, median={knee_top['median']:.3g}, p95={knee_top['p95']:.3g}"
+        )
+    else:
+        lines.append("- top knee_score_rank: n=0")
+
+    rng = np.random.default_rng(123)
+    if knee_valid.any():
+        sample = df.loc[knee_valid, "knee_x_norm"].dropna()
+        if not sample.empty:
+            idx = rng.choice(sample.index, size=min(100, len(sample)), replace=False)
+            knee_rand = _distribution_extended(sample.loc[idx])
+            if knee_rand:
+                lines.append(
+                    f"- random controls: n={knee_rand['count']}, p05={knee_rand['p05']:.3g}, median={knee_rand['median']:.3g}, p95={knee_rand['p95']:.3g}"
+                )
     lines.append("")
 
     lines.append("## Normalization effects")
