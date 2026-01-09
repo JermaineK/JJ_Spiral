@@ -1,3 +1,3 @@
 """Pipeline version info."""
 
-PIPELINE_VERSION = "0.4.5"
+PIPELINE_VERSION = "5.5"

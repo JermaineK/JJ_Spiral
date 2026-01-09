@@ -1,0 +1,4 @@
+metric,median,n,pipeline_version
+delta_coherence_gradient,0.4173481935868342,1547,5.5
+knee_alignment_gain_odd_ratio_post,1.0024161320350011,1602,5.5
+knee_alignment_gain_coherence_post,1.0,1547,5.5

@@ -237,7 +237,7 @@ def main() -> None:
             )
     lines.append("")
 
-    lines.append("## Parity stability")
+    lines.append("## Odd-dominance (voltage-only)")
     lines.append("")
     if not parity_stats:
         lines.append("- parity_stability: n=0")
@@ -246,16 +246,33 @@ def main() -> None:
             f"- parity_stability: n={parity_stats['count']}, median={parity_stats['median']:.6g}, p95={parity_stats['p95']:.6g}"
         )
     if knee_parity_summary is None:
-        lines.append("- Knee parity summary: unavailable")
+        lines.append("- Knee odd-dominance summary: unavailable")
     else:
         row = knee_parity_summary.iloc[0]
         lines.append(
-            f"- Knee parity flips: n={int(row['n_flip'])} / {int(row['n_total'])} (fraction={row['fraction_flip']:.4g})"
+            f"- Knee odd flips: n={int(row['n_flip'])} / {int(row['n_total'])} (fraction={row['fraction_flip']:.4g})"
         )
         lines.append(
-            f"- Parity locks after knee: n={int(row['n_lock_after'])} / {int(row['n_total'])} (fraction={row['fraction_lock_after']:.4g})"
+            f"- Odd dominance after knee (odd_dominance_fraction): n={int(row['n_lock_after'])} / {int(row['n_total'])} (fraction={row['fraction_lock_after']:.4g})"
+        )
+        lines.append(
+            "- Disclaimer: odd_dominance_fraction reflects dominance of odd symmetry in voltage-only traces and is not interpreted as fixed handedness."
         )
     lines.append("")
+
+    knee_window_path = Path("results/reports/phase45_knee_window.csv")
+    if knee_window_path.exists():
+        knee_df = pd.read_csv(knee_window_path)
+        if not knee_df.empty and "eta_knee_random_ratio" in knee_df.columns:
+            ratio = pd.to_numeric(knee_df["eta_knee_random_ratio"], errors="coerce").dropna()
+            if not ratio.empty:
+                frac_gt = float((ratio > 1.0).mean())
+                lines.append("## Knee-conditioned oddness (Phase 4.5 salvage)")
+                lines.append("")
+                lines.append(
+                    f"- eta_knee_window / eta_random_window: n={len(ratio)}, median={float(ratio.median()):.4g}, fraction>1={frac_gt:.4g}"
+                )
+                lines.append("")
 
     lines.append("## Top odd-channel candidates (eta_norm)")
     lines.append("")
@@ -284,7 +301,10 @@ def main() -> None:
     lines.append(
         "- Incoherence normalization rescales eta and knee scores, promoting low-incoherence traces while keeping raw values intact."
     )
-    lines.append("- Parity stability and knee-parity stats quantify whether odd-channel signals persist across segments.")
+    lines.append("- Odd-dominance statistics capture voltage-only asymmetry without implying fixed handedness.")
+    lines.append(
+        "- Phase 4.5 identifies widespread odd-dominant structure; Phase 5+ shows the discriminating signal lies in coherence changes across knee-like transitions."
+    )
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

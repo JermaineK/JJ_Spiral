@@ -76,3 +76,43 @@ null_models:
   seed: 123
   phase_all_segments: false
   phase_full_pass: false
+phase5:
+  grid_n: 401
+  min_points: 10
+  min_overlap: 0.8
+  eps: 1.0e-12
+  sign_eps: 1.0e-15
+  monotonicity_threshold: 0.95
+  spacing_cv_warn: 0.2
+  knee_savgol_window: 11
+  knee_savgol_polyorder: 3
+  knee_edge_frac: 0.05
+  parity_stable_thresh: 0.8
+  parity_unstable_thresh: 0.6
+  cond_zero_thresh: 1.0e-12
+  nulls:
+    sign_n: 100
+    phase_n: 100
+    pair_n: 100
+    pair_match_tol: 0.2
+    seed: 123
+phase55:
+  window_log_width: 0.15
+  window_log_step: 0.075
+  window_min_points: 6
+  knee_jitter_frac: 0.2
+  knee_jitter_n: 100
+  knee_jitter_n_null: 25
+  direction_threshold: 0.6
+  permute_n: 500
+  local_shuffle_bins: 20
+  null_sample_segments: 400
+  eps: 1.0e-12
+  nulls:
+    phase_n: 50
+    pair_n: 50
+    local_shuffle_n: 50
+    seed: 123
+phase45_salvage:
+  knee_window_frac: 0.2
+  random_seed: 123

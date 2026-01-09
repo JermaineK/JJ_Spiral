@@ -1,6 +1,6 @@
 # Summary
 
-- Pipeline version: 0.4.5
+- Pipeline version: 5.5
 
 ## Dataset capabilities
 
@@ -63,11 +63,16 @@
 - 220729121637_163_1_0 seg=0 eta=0.8519 eta_norm=6.299 H_incoh=0.135
 - 220729121637_158_2_1 seg=0 eta=0.8483 eta_norm=5.157 H_incoh=0.164
 
-## Parity stability
+## Odd-dominance (voltage-only)
 
 - parity_stability: n=4045, median=1, p95=1
-- Knee parity flips: n=169 / 3651 (fraction=0.04629)
-- Parity locks after knee: n=3639 / 3651 (fraction=0.9967)
+- Knee odd flips: n=169 / 3651 (fraction=0.04629)
+- Odd dominance after knee (odd_dominance_fraction): n=3639 / 3651 (fraction=0.9967)
+- Disclaimer: odd_dominance_fraction reflects dominance of odd symmetry in voltage-only traces and is not interpreted as fixed handedness.
+
+## Knee-conditioned oddness (Phase 4.5 salvage)
+
+- eta_knee_window / eta_random_window: n=28, median=1, fraction>1=0.1786
 
 ## Top odd-channel candidates (eta_norm)
 
@@ -118,4 +123,5 @@
 ## Interpretation
 
 - Incoherence normalization rescales eta and knee scores, promoting low-incoherence traces while keeping raw values intact.
-- Parity stability and knee-parity stats quantify whether odd-channel signals persist across segments.
+- Odd-dominance statistics capture voltage-only asymmetry without implying fixed handedness.
+- Phase 4.5 identifies widespread odd-dominant structure; Phase 5+ shows the discriminating signal lies in coherence changes across knee-like transitions.

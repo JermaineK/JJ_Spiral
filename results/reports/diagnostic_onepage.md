@@ -1,6 +1,6 @@
 # Diagnostics (one-page)
 
-- Pipeline version: 0.4.5
+- Pipeline version: 5.5
 - eta_valid segments: 4045 / 32310
 - knee_edge_flag (valid knees): 0.04%
 - knee_score_capped: 1.00%

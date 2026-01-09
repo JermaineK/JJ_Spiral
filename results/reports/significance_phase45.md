@@ -1,6 +1,6 @@
 # Significance summary
 
-- Pipeline version: 0.4.5
+- Pipeline version: 5.5
 
 ## Null models
 
