@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+try:
+    from scipy.stats import norm as _norm
+except Exception:  # pragma: no cover - optional dependency guard
+    _norm = None
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -146,19 +151,20 @@ def _direction_randomization_null(
     min_overlap: float,
     den_min: float,
     rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     file_ids = sorted({seg["file_id"] for seg in segments})
     file_index = {fid: idx for idx, fid in enumerate(file_ids)}
-    counts0 = np.zeros(len(file_ids), dtype=int)
-    counts1 = np.zeros(len(file_ids), dtype=int)
 
-    eta_medians = []
-    lock_fracs = []
+    eta_medians = np.full(n_iter, np.nan, dtype=float)
+    parity_medians = np.full(n_iter, np.nan, dtype=float)
+    lock_fracs = np.full(n_iter, np.nan, dtype=float)
 
     for it in range(n_iter):
         eta_vals = []
         lock_num = 0
         lock_den = 0
+        counts0 = np.zeros(len(file_ids), dtype=int)
+        counts1 = np.zeros(len(file_ids), dtype=int)
         for seg in segments:
             x = seg["x"]
             v = seg["v"]
@@ -218,14 +224,17 @@ def _direction_randomization_null(
             lock_den += 1
 
         if eta_vals:
-            eta_medians.append(float(np.median(eta_vals)))
+            eta_medians[it] = float(np.median(eta_vals))
         if lock_den:
-            lock_fracs.append(float(lock_num / lock_den))
+            lock_fracs[it] = float(lock_num / lock_den)
 
-    counts_sum = counts0 + counts1
-    valid = counts_sum > 0
+        counts_sum = counts0 + counts1
+        valid = counts_sum > 0
+        if np.any(valid):
+            stability = np.maximum(counts0[valid], counts1[valid]) / counts_sum[valid]
+            parity_medians[it] = float(np.median(stability))
 
-    return np.array(eta_medians), counts0[valid], counts1[valid], np.array(lock_fracs)
+    return eta_medians, parity_medians, lock_fracs
 
 
 def _phase_scramble_null(
@@ -238,14 +247,13 @@ def _phase_scramble_null(
     rng: np.random.Generator,
     config: dict,
     bounds: tuple[float, float] | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     bidir_files = sorted({seg["file_id"] for seg in segments if seg.get("is_bidirectional")})
     file_index = {fid: idx for idx, fid in enumerate(bidir_files)}
-    counts0 = np.zeros(len(bidir_files), dtype=int)
-    counts1 = np.zeros(len(bidir_files), dtype=int)
 
-    eta_medians = []
-    lock_fracs = []
+    eta_medians = np.full(n_iter, np.nan, dtype=float)
+    parity_medians = np.full(n_iter, np.nan, dtype=float)
+    lock_fracs = np.full(n_iter, np.nan, dtype=float)
 
     min_segment = int(config.get("knee", {}).get("min_segment", 3))
 
@@ -253,6 +261,8 @@ def _phase_scramble_null(
         eta_vals = []
         lock_num = 0
         lock_den = 0
+        counts0 = np.zeros(len(bidir_files), dtype=int)
+        counts1 = np.zeros(len(bidir_files), dtype=int)
         for seg in segments:
             x = seg["x"]
             v = seg["v"]
@@ -322,14 +332,17 @@ def _phase_scramble_null(
             lock_den += 1
 
         if eta_vals:
-            eta_medians.append(float(np.median(eta_vals)))
+            eta_medians[it] = float(np.median(eta_vals))
         if lock_den:
-            lock_fracs.append(float(lock_num / lock_den))
+            lock_fracs[it] = float(lock_num / lock_den)
 
-    counts_sum = counts0 + counts1
-    valid = counts_sum > 0
+        counts_sum = counts0 + counts1
+        valid = counts_sum > 0
+        if np.any(valid):
+            stability = np.maximum(counts0[valid], counts1[valid]) / counts_sum[valid]
+            parity_medians[it] = float(np.median(stability))
 
-    return np.array(eta_medians), counts0[valid], counts1[valid], np.array(lock_fracs)
+    return eta_medians, parity_medians, lock_fracs
 
 
 def _summary_stats(values: np.ndarray) -> tuple[float | None, float | None]:
@@ -402,26 +415,42 @@ def _stratified_sample(segments: list[dict], max_segments: int, rng: np.random.G
     return sampled
 
 
-def _bootstrap_parity_stability(
-    counts0: np.ndarray,
-    counts1: np.ndarray,
-    n_boot: int,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    counts0 = np.asarray(counts0, dtype=float)
-    counts1 = np.asarray(counts1, dtype=float)
-    total = counts0 + counts1
-    valid = total > 0
-    if not np.any(valid) or n_boot <= 0:
-        return np.array([])
-    total = total[valid]
-    p = counts1[valid] / total
-    medians = []
-    for _ in range(n_boot):
-        draws = rng.binomial(total.astype(int), p)
-        stability = np.maximum(draws, total - draws) / total
-        medians.append(float(np.median(stability)))
-    return np.array(medians)
+def _combined_statistic(
+    eta_null: np.ndarray,
+    b_null: np.ndarray,
+    lock_null: np.ndarray,
+    obs_eta: float,
+    obs_b: float,
+    obs_lock: float,
+) -> dict | None:
+    arr = np.column_stack([eta_null, b_null, lock_null])
+    mask = np.isfinite(arr).all(axis=1)
+    arr = arr[mask]
+    obs = np.array([obs_eta, obs_b, obs_lock], dtype=float)
+    if arr.shape[0] < 3 or not np.isfinite(obs).all():
+        return None
+    mu = arr.mean(axis=0)
+    cov = np.cov(arr, rowvar=False, ddof=1) if arr.shape[0] > 1 else np.eye(3)
+    try:
+        inv = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        inv = np.linalg.pinv(cov)
+    diff = obs - mu
+    q_obs = float(diff.T @ inv @ diff)
+    diff_null = arr - mu
+    q_null = np.einsum("ij,jk,ik->i", diff_null, inv, diff_null)
+    p_emp = float((np.sum(q_null >= q_obs) + 1) / (len(q_null) + 1))
+    z_equiv = float(_norm.isf(p_emp)) if _norm is not None else None
+    return {
+        "mu": mu.tolist(),
+        "cov": cov.tolist(),
+        "q_obs": q_obs,
+        "q_null_mean": float(q_null.mean()),
+        "q_null_std": float(q_null.std(ddof=1)) if q_null.size > 1 else 0.0,
+        "p_empirical": p_emp,
+        "z_equiv": z_equiv,
+        "n": int(arr.shape[0]),
+    }
 
 
 def main() -> None:
@@ -464,9 +493,9 @@ def main() -> None:
         LOGGER.warning("Unable to compute H_incoh normalization bounds; null eta_norm may be skipped.")
 
     direction_n = int(config.get("null_models", {}).get("direction_n", 200))
+    direction_max_segments = int(config.get("null_models", {}).get("direction_max_segments", 0))
     phase_n = int(config.get("null_models", {}).get("phase_n", 50))
     phase_max_segments = int(config.get("null_models", {}).get("phase_max_segments", 0))
-    parity_boot = int(config.get("null_models", {}).get("parity_boot", 200))
     z_boot = int(config.get("null_models", {}).get("z_boot", 200))
     phase_all = bool(config.get("null_models", {}).get("phase_all_segments", True))
     phase_full_pass = bool(config.get("null_models", {}).get("phase_full_pass", False))
@@ -477,7 +506,6 @@ def main() -> None:
     den_min = float(config.get("parity", {}).get("den_min", 0.0))
     rng = np.random.default_rng(base_seed)
     rng_full = np.random.default_rng(base_seed + 1)
-    rng_boot = np.random.default_rng(base_seed + 2)
     rng_sample = np.random.default_rng(base_seed + 3)
     rng_z = np.random.default_rng(base_seed + 4)
 
@@ -490,6 +518,9 @@ def main() -> None:
     dropped = before - len(segments_bidir)
     if dropped:
         LOGGER.info("Dropped %d bidirectional segments without H_incoh for direction null.", dropped)
+    if direction_max_segments > 0 and len(segments_bidir) > direction_max_segments:
+        segments_bidir = _stratified_sample(segments_bidir, direction_max_segments, rng_sample)
+        LOGGER.info("Direction null using %d sampled segments (stratified).", len(segments_bidir))
 
     obs_lock = np.nan
     subset = df[
@@ -504,7 +535,7 @@ def main() -> None:
         obs_lock = float((subset["parity_post"] == subset["parity_bit"]).mean())
 
     LOGGER.info("Running direction-randomized null with N=%d", direction_n)
-    eta_null_a, counts0_a, counts1_a, lock_null_a = _direction_randomization_null(
+    eta_null_a, tb_null_a, lock_null_a = _direction_randomization_null(
         segments_bidir,
         n_iter=direction_n,
         grid_n=grid_n,
@@ -513,7 +544,6 @@ def main() -> None:
         den_min=den_min,
         rng=rng,
     )
-    tb_null_a = _bootstrap_parity_stability(counts0_a, counts1_a, parity_boot, rng_boot)
 
     if phase_all:
         segments_all = _load_segments(df, segments_dir, config, only_bidirectional=False)
@@ -536,7 +566,7 @@ def main() -> None:
         LOGGER.info("Phase-scramble knee metrics recomputed for %d segments (single pass).", total)
 
     LOGGER.info("Running phase-scrambled null with N=%d", phase_n)
-    eta_null_b, counts0_b, counts1_b, lock_null_b = _phase_scramble_null(
+    eta_null_b, tb_null_b, lock_null_b = _phase_scramble_null(
         segments_all,
         n_iter=phase_n,
         grid_n=grid_n,
@@ -547,7 +577,6 @@ def main() -> None:
         config=config,
         bounds=bounds,
     )
-    tb_null_b = _bootstrap_parity_stability(counts0_b, counts1_b, parity_boot, rng_boot)
 
     rows = []
     for label, eta_null, tb_null, lock_null in [
@@ -607,6 +636,22 @@ def main() -> None:
     summary_name = f"significance_summary{args.suffix}.csv"
     summary_df.to_csv(out_dir / summary_name, index=False)
 
+    combined = {
+        "pipeline_version": PIPELINE_VERSION,
+        "metrics": ["T_eta", "T_b", "T_lock"],
+        "null_models": {},
+    }
+    combined_dir = {
+        "direction_randomization": (eta_null_a, tb_null_a, lock_null_a),
+        "phase_scramble": (eta_null_b, tb_null_b, lock_null_b),
+    }
+    for label, (eta_null, tb_null, lock_null) in combined_dir.items():
+        stats = _combined_statistic(eta_null, tb_null, lock_null, obs_eta, obs_b, obs_lock)
+        if stats is not None:
+            combined["null_models"][label] = stats
+    combined_name = f"combined_stat_covariance{args.suffix}.json"
+    (out_dir / combined_name).write_text(json.dumps(combined, indent=2) + "\n", encoding="utf-8")
+
     def _find_z(stat: str, model: str, column: str = "z_score") -> float | None:
         match = summary_df[(summary_df["statistic"] == stat) & (summary_df["null_model"] == model)]
         if match.empty:
@@ -620,9 +665,13 @@ def main() -> None:
     lines.append("")
     lines.append("## Null models")
     lines.append("")
-    lines.append(
-        f"- Direction randomization: per-point sign flips (50/50) on bidirectional traces; N={direction_n}."
-    )
+    direction_line = f"- Direction randomization: per-point sign flips (50/50) on bidirectional traces; N={direction_n}."
+    if direction_max_segments > 0:
+        direction_line = (
+            f"- Direction randomization: per-point sign flips (50/50) on bidirectional traces; "
+            f"N={direction_n}, direction_max_segments={direction_max_segments} (stratified by x_name)."
+        )
+    lines.append(direction_line)
     lines.append(
         f"- Phase scramble: randomize FFT phases per segment (amplitude preserved); N={phase_n}, phase_all_segments={phase_all}, phase_full_pass={phase_full_pass}, phase_max_segments={phase_max_segments} (stratified by x_name)."
     )
@@ -630,7 +679,7 @@ def main() -> None:
         "- Parity-bit null handling: eta_V_signed is randomly sign-flipped (50/50) per evaluation to emulate direction-label ambiguity."
     )
     lines.append(
-        f"- Parity stability null uses a binomial bootstrap over per-file parity counts; bootstrap_n={parity_boot}."
+        "- Parity stability null uses per-iteration medians across files (no bootstrap on counts)."
     )
     lines.append(f"- Z-score ranges use bootstrap over null replicates; z_boot={z_boot}.")
     lines.append("")
@@ -663,9 +712,19 @@ def main() -> None:
             f"z_b={_fmt(z_b)} (p5={_fmt(z_b_low)}, p95={_fmt(z_b_high)}), "
             f"z_lock={_fmt(z_lock)} (p5={_fmt(z_lock_low)}, p95={_fmt(z_lock_high)})"
         )
-        if all(val is not None for val in [z_eta, z_b, z_lock]):
-            z_combined = float(np.sqrt(z_eta**2 + z_b**2 + z_lock**2))
-            lines.append(f"- {model}: z_combined={z_combined:.4g} (assumes approximate independence)")
+    lines.append("")
+    lines.append("## Covariance-aware combined statistic")
+    lines.append("")
+    for model in ["direction_randomization", "phase_scramble"]:
+        stats = combined["null_models"].get(model)
+        if not stats:
+            lines.append(f"- {model}: covariance statistic unavailable (insufficient data).")
+            continue
+        z_equiv = stats.get("z_equiv")
+        z_text = f"{z_equiv:.4g}" if z_equiv is not None else "NA"
+        lines.append(
+            f"- {model}: Q_obs={stats['q_obs']:.4g}, p_emp={stats['p_empirical']:.4g}, z_equiv={z_text}, n={stats['n']}"
+        )
     lines.append("")
     lines.append("## Interpretation")
     lines.append("")

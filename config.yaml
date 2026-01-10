@@ -68,9 +68,10 @@ pairing:
   csv: null
   regex: null
 null_models:
-  direction_n: 300
-  phase_n: 100
-  phase_max_segments: 600
+  direction_n: 150
+  direction_max_segments: 300
+  phase_n: 50
+  phase_max_segments: 300
   parity_boot: 200
   z_boot: 500
   seed: 123
@@ -116,3 +117,64 @@ phase55:
 phase45_salvage:
   knee_window_frac: 0.2
   random_seed: 123
+phase6:
+  branch:
+    smooth_window: 11
+    smooth_polyorder: 3
+    diff_threshold: 0.1
+    min_points: 12
+  sensitivity:
+    min_overlap: [0.2, 0.35, 0.5, 0.65, 0.8]
+    grid_method: [linear, pchip]
+    grid_density: [low, medium, high]
+    grid_n_base: 401
+    robust_pct: 0.1
+    nulls:
+      sign_n: 20
+      phase_n: 20
+      pair_n: 20
+      pair_match_tol: 0.2
+      sample_segments: 80
+      seed: 123
+  nuisance_warp:
+    models: [odd_cubic, odd_kink]
+    a_min: -0.2
+    a_max: 0.2
+    b_min: 0.0
+    b_max_frac: 0.2
+  stratify:
+    temp_bins: 4
+    coil_bins: 4
+    min_group: 8
+phase7:
+  grid_n: 401
+  min_overlap: 0.8
+  spacing_cv_warn: 0.2
+  branch:
+    smooth_window: 11
+    smooth_polyorder: 3
+    diff_threshold: 0.1
+    min_points: 12
+  bins:
+    temp_bins: 4
+    coil_bins: 4
+    min_bin_n: 8
+    trim_frac: 0.1
+  alignment:
+    window_log_width: 0.15
+    window_log_step: 0.075
+    window_min_points: 6
+    normalize:
+      p_low: 5.0
+      p_high: 95.0
+  nulls:
+    direction_n: 200
+    pairing_n: 200
+    pairing_samples: 200
+    nuisance_samples: 200
+    seed: 123
+  nuisance:
+    piecewise_slope: 0.15
+    offset_frac: 0.02
+    loop_squash: 0.1
+    v_offset_frac: 0.05

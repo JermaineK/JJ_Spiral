@@ -1,0 +1,15 @@
+{
+  "pipeline_version": "6.0",
+  "branch_metrics": "results\\phase6\\phase6_branch_metrics.csv",
+  "branch_split_qc": "results/reports/branch_split_qc.csv",
+  "branch_consistency": "results/reports/branch_consistency.csv",
+  "sensitivity_grid": "results/reports/sensitivity_grid.csv",
+  "sensitivity_robust_summary": "results/reports/sensitivity_robust_summary.csv",
+  "nuisance_warp_fit": "results/reports/nuisance_warp_fit.csv",
+  "nuisance_robustness": "results/reports/nuisance_robustness.csv",
+  "stratified_metrics": "results/reports/stratified_metrics.csv",
+  "stratified_plots": [
+    "results/plots/stratified_temp_bins.png",
+    "results/plots/stratified_temp_bins.pdf"
+  ]
+}

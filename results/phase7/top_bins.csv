@@ -1,0 +1,19 @@
+group_field,metric,bin,n,median
+device_id,odd_ratio_post,BS30_A1S1,4810,5.786369189190257
+device_id,alignment_score,BS30_A1S1,4810,0.5576398746088164
+experiment_family,odd_ratio_post,Fig2,4810,5.786369189190257
+experiment_family,alignment_score,Fig2,4810,0.5576398746088164
+temp_bin,odd_ratio_post,"(0.273, 1.4]",4813,5.788873996537289
+temp_bin,alignment_score,"(0.273, 1.4]",4813,0.5576294825794584
+coil_bin,odd_ratio_post,"(0.000151, 0.0003]",599,19.925691854027068
+coil_bin,odd_ratio_post,"(0.0, 0.000151]",603,8.581449151457074
+coil_bin,odd_ratio_post,"(-0.00015, 0.0]",600,6.82591668193581
+coil_bin,odd_ratio_post,"(-0.0013, -0.00015]",603,5.862964965764518
+coil_bin,odd_ratio_post,nan,2408,2.256956082884158
+coil_bin,alignment_score,"(-0.00015, 0.0]",600,0.7620765385137798
+coil_bin,alignment_score,"(0.0, 0.000151]",603,0.7608616157353407
+coil_bin,alignment_score,"(-0.0013, -0.00015]",603,0.756512055365479
+coil_bin,alignment_score,"(0.000151, 0.0003]",599,0.5813616390375325
+coil_bin,alignment_score,nan,2408,0.5242618238649731
+x_name,odd_ratio_post,I_A,4813,5.788873996537289
+x_name,alignment_score,I_A,4813,0.5576294825794584

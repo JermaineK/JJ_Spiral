@@ -1,0 +1,9 @@
+{
+  "pipeline_version": "6.0",
+  "metadata": "results\\phase7\\metadata.csv",
+  "branches": "results\\phase7\\branches.csv",
+  "branch_metrics": "results\\phase7\\branch_metrics.csv",
+  "condition_tables": "results\\phase7\\condition_tables",
+  "nulls": "results\\phase7\\nulls",
+  "nuisance_fingerprints": "results\\phase7\\nuisance_fingerprints.csv"
+}

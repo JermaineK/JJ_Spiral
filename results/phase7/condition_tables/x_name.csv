@@ -1,0 +1,2 @@
+group_field,bin,n,odd_ratio_post_median,odd_ratio_post_trimmed,phi0_proxy_median,phi0_proxy_trimmed,I_knee_norm_median,I_knee_norm_trimmed,alignment_score_median,alignment_score_trimmed,parity_lock_after_knee_median,parity_lock_after_knee_trimmed
+x_name,I_A,4813,5.788873996537289,5.788873996537289,1.9751140998585253,1.9751140998585253,0.6115288220551378,0.6115288220551378,0.5576294825794584,0.5576294825794584,0.0,0.0

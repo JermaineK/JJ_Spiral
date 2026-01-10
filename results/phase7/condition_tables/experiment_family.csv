@@ -1,0 +1,2 @@
+group_field,bin,n,odd_ratio_post_median,odd_ratio_post_trimmed,phi0_proxy_median,phi0_proxy_trimmed,I_knee_norm_median,I_knee_norm_trimmed,alignment_score_median,alignment_score_trimmed,parity_lock_after_knee_median,parity_lock_after_knee_trimmed
+experiment_family,Fig2,4810,5.786369189190257,5.786369189190257,1.9765271078587228,1.9765271078587228,0.6115288220551378,0.6115288220551378,0.5576398746088164,0.5576398746088164,0.0,0.0
